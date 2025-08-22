@@ -9,7 +9,8 @@ except OSError:
     from spacy.cli import download
     download("fr_core_news_sm")
     nlp = spacy.load("fr_core_news_sm")
-from sentencegit add requirements.txt_transformers import SentenceTransformer, util
+from sentencegit add requirements.txt_transformers 
+import SentenceTransformer, util
 import re
 import io
 import PyPDF2
