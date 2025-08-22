@@ -1,7 +1,15 @@
 import streamlit as st
 import pandas as pd
+##import spacy
 import spacy
-from sentence_transformers import SentenceTransformer, util
+try:
+    nlp = spacy.load("fr_core_news_sm")
+except OSError:
+    # fallback in case model not found
+    from spacy.cli import download
+    download("fr_core_news_sm")
+    nlp = spacy.load("fr_core_news_sm")
+from sentencegit add requirements.txt_transformers import SentenceTransformer, util
 import re
 import io
 import PyPDF2
