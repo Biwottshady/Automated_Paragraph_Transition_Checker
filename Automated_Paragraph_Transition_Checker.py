@@ -142,7 +142,7 @@ st.markdown("""
        src="https://images.unsplash.com/photo-1588681664899-f142ff2dc9b1?ixlib=rb-4.0.3&auto=format&fit=crop&w=1800&q=80"
        alt="French Newspaper Background">
   <div class="header-overlay">
-    <div class="header-title">📰 French Transition Phrase Quality Assurance</div>
+    <div class="header-title">📰 French News QA Tool Prototype</div>
     <div class="header-subtitle">
       Analyse et amélioration des transitions journalistiques : cohésion, répétition, longueur, et placement conclusif.
     </div>
