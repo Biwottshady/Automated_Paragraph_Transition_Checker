@@ -1,13 +1,18 @@
 import streamlit as st
 import pandas as pd
 import spacy
+from spacy.cli import download
+
+# Ensure SpaCy models are available
+try:
+    spacy.load("fr_core_news_sm")
+except OSError:
+    download("fr_core_news_sm")
 
 try:
-    nlp = spacy.load("fr_core_news_sm")
+    spacy.load("en_core_web_sm")
 except OSError:
-    from spacy.cli import download
-    download("fr_core_news_sm")
-    nlp = spacy.load("fr_core_news_sm")
+    download("en_core_web_sm")
 
 from sentence_transformers import SentenceTransformer, util
 import re
