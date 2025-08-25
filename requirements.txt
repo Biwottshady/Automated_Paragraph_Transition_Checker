@@ -1,6 +1,6 @@
 spacy==3.7.2
 sentence-transformers==2.2.2
-torch>=2.2.0
+torch>=2.2.0+cpu  -f https://download.pytorch.org/whl/torch_stable.html
 numpy
 pandas
 matplotlib
