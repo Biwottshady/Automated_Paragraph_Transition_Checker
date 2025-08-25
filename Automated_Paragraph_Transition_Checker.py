@@ -3,14 +3,17 @@ import streamlit as st
 import pandas as pd
 import re
 import io
+import zipfile
 import PyPDF2
 from docx import Document
 import matplotlib.pyplot as plt
-from collections import Counter, defaultdict
+from collections import Counter
 import warnings
 warnings.filterwarnings('ignore')
 
-# ---------------- Streamlit Page Configuration ----------------
+# ------------------------------------------------------------
+# Streamlit Page Configuration
+# ------------------------------------------------------------
 st.set_page_config(
     page_title="French Transition QA Tool",
     page_icon="📰",
@@ -18,7 +21,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ---------------- Global constants / resources ----------------
+# ------------------------------------------------------------
+# Global constants / resources
+# ------------------------------------------------------------
 # Minimal French stopword list for fallback when spaCy isn't available
 FRENCH_STOPWORDS = {
     "alors","au","aucuns","aussi","autre","avant","avec","avoir","bon","car","ce","cela",
@@ -58,7 +63,9 @@ CONNECTOR_BANK = {
     "summary": ["en résumé", "pour résumer", "bref", "en bref"]
 }
 
-# ---------------- Custom CSS Styling (including background) ----------------
+# ------------------------------------------------------------
+# Custom CSS Styling (including editorial photo background)
+# ------------------------------------------------------------
 st.markdown("""
 <style>
 /* Editorial photo background w/ fixed cover and subtle vignette */
@@ -68,45 +75,34 @@ st.markdown("""
     background-position: center;
     background-attachment: fixed;
 }
-
 [data-testid="stAppViewContainer"]::before {
     content: "";
     position: fixed;
     inset: 0;
-    background: rgba(12, 18, 28, 0.50);
+    background: rgba(12, 18, 28, 0.52);
     z-index: 0;
 }
-
 /* Make main blocks readable over the image */
 .block-container {
     position: relative;
     z-index: 1;
-    background: rgba(255,255,255,0.88);
+    background: rgba(255,255,255,0.90);
     backdrop-filter: blur(2px);
     border-radius: 14px;
     padding: 1.2rem 1.2rem 0.8rem 1.2rem;
     box-shadow: 0 10px 30px rgba(0,0,0,0.12);
 }
-
 /* Keep sidebar readable */
 [data-testid="stSidebar"] > div:first-child {
     background: rgba(255,255,255,0.96);
     backdrop-filter: blur(3px);
 }
-
-/* Existing theme accents */
+/* Header banner */
 .header-container {
-    position: relative;
-    width: 100%;
-    height: 280px;
-    overflow: hidden;
-    border-radius: 12px;
-    margin-bottom: 1.3rem;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+    position: relative; width: 100%; height: 280px; overflow: hidden;
+    border-radius: 12px; margin-bottom: 1.3rem; box-shadow: 0 4px 12px rgba(0,0,0,0.18);
 }
-.header-image {
-    width: 100%; height: 100%; object-fit: cover; opacity: 0.85;
-}
+.header-image { width: 100%; height: 100%; object-fit: cover; opacity: 0.85; }
 .header-overlay {
     position: absolute; top: 0; left: 0; width: 100%; height: 100%;
     background: linear-gradient(135deg, rgba(31,119,180,0.85) 0%, rgba(44,62,80,0.85) 100%);
@@ -116,9 +112,9 @@ st.markdown("""
 .header-title { font-size: 2.4rem; font-weight: 800; margin-bottom: 0.3rem; }
 .header-subtitle { font-size: 1.05rem; max-width: 900px; opacity: 0.95; }
 
+/* Section headers + metric cards */
 .sub-header { font-size: 1.3rem; color: #2c3e50; border-bottom: 3px solid #3498db;
   padding-bottom: .35rem; margin-top: 1.2rem; margin-bottom: .9rem; }
-
 .metric-card {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   padding: 1.0rem; border-radius: 12px; box-shadow: 0 4px 8px rgba(0,0,0,0.15);
@@ -127,14 +123,19 @@ st.markdown("""
 }
 .metric-value { font-size: 1.4rem; font-weight: 800; margin-bottom: .1rem; }
 .metric-label { font-size: .85rem; opacity: .95; }
+
 .rule-box { background-color: #f8f9fa; padding: .8rem; border-radius: 8px; margin: .4rem 0;
   border-left: 4px solid #6c757d; }
 .success-box { background: linear-gradient(135deg,#d4edda 0%,#c3e6cb 100%);
   border-left: 5px solid #28a745; padding: .8rem; border-radius: 8px; margin: .6rem 0; }
+.warning-box { background: linear-gradient(135deg,#fff3cd 0%,#ffeaa7 100%);
+  border-left: 5px solid #ffc107; padding: .8rem; border-radius: 8px; margin: .6rem 0; }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- Header Image Section ----------------
+# ------------------------------------------------------------
+# Header Image Section
+# ------------------------------------------------------------
 st.markdown("""
 <div class="header-container">
   <img class="header-image"
@@ -149,7 +150,9 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ---------------- Model loading ----------------
+# ------------------------------------------------------------
+# Model loading
+# ------------------------------------------------------------
 @st.cache_resource
 def load_spacy_model():
     """Load French spaCy model with fallback options"""
@@ -176,14 +179,12 @@ def load_sentence_model():
     """Load sentence transformer model with error handling"""
     try:
         from sentence_transformers import SentenceTransformer
-        # Both IDs tried to bypass some hub/import variations
         try:
             return SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
         except Exception:
             return SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
     except Exception as e:
         st.error(f"❌ Error loading sentence transformer: {e}")
-        # Fallback model
         try:
             from sentence_transformers import SentenceTransformer
             st.warning("⚠️ Trying fallback model distiluse-base-multilingual-cased")
@@ -201,7 +202,9 @@ def initialize_models():
         st.stop()
     return nlp, sentence_model
 
-# ---------------- Sidebar ----------------
+# ------------------------------------------------------------
+# Sidebar
+# ------------------------------------------------------------
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/france-circular.png", width=72)
     st.markdown("<h2 style='text-align:center;margin-top:-6px'>French Transition QA</h2>", unsafe_allow_html=True)
@@ -219,14 +222,17 @@ with st.sidebar:
     with st.expander("View all quality rules"):
         st.markdown(f"""
         <div class="rule-box"><strong>Word Count</strong>: ≤ {word_limit} mots</div>
-        <div class="rule-box"><strong>Position</strong>: transition à la fin (dernier paragraphe)</div>
+        <div class="rule-box"><strong>Position</strong>: transition à la fin (dernier paragraphe uniquement)</div>
         <div class="rule-box"><strong>Repetition</strong>: pas de répétition de lemme dans l'article</div>
         <div class="rule-box"><strong>Cohesion</strong>: sim(next) - sim(prev) ≥ {similarity_threshold:.02f}</div>
         """, unsafe_allow_html=True)
     st.markdown("---")
+    st.caption("Contest dataset link available in the brief. You can upload .zip / .txt / .pdf / .docx.")
     st.caption("Built for French Transition Contest Submission")
 
-# ---------------- File parsing ----------------
+# ------------------------------------------------------------
+# File parsing
+# ------------------------------------------------------------
 def extract_text_from_pdf(pdf_file):
     text = ""
     try:
@@ -254,6 +260,23 @@ def extract_text_from_docx(docx_file):
         st.error(f"Error reading DOCX: {e}")
         return ""
 
+def extract_texts_from_zip(zip_file):
+    """Read all .txt files from a ZIP and concatenate with separators."""
+    texts = []
+    try:
+        with zipfile.ZipFile(zip_file) as z:
+            for name in z.namelist():
+                if name.lower().endswith(".txt"):
+                    with z.open(name) as f:
+                        try:
+                            content = f.read().decode('utf-8', errors='ignore')
+                            texts.append(content)
+                        except Exception:
+                            pass
+    except Exception as e:
+        st.error(f"Error reading ZIP: {e}")
+    return "\n\n".join(texts)
+
 def extract_text(uploaded_file):
     ext = uploaded_file.name.split('.')[-1].lower()
     if ext == 'pdf':
@@ -262,11 +285,15 @@ def extract_text(uploaded_file):
         return extract_text_from_txt(uploaded_file)
     elif ext == 'docx':
         return extract_text_from_docx(uploaded_file)
+    elif ext == 'zip':
+        return extract_texts_from_zip(uploaded_file)
     else:
-        st.error(f"Unsupported file type: {ext}. Only PDF, TXT, DOCX allowed.")
+        st.error(f"Unsupported file type: {ext}. Only ZIP, PDF, TXT, DOCX allowed.")
         return ""
 
-# ---------------- Article parsing ----------------
+# ------------------------------------------------------------
+# Article parsing
+# ------------------------------------------------------------
 def parse_articles_from_text(text):
     """Parse articles and transitions from the extracted text"""
     articles = []
@@ -337,18 +364,9 @@ def create_dataframe_from_articles(articles):
                 })
     return pd.DataFrame(data)
 
-# ---------------- QA checks ----------------
-def check_word_count(transition_text, limit=5):
-    words = re.findall(r'\b\w+\b', transition_text, flags=re.UNICODE)
-    return len(words) <= limit, len(words)
-
-def check_final_position(article_data, article_id, para_idx):
-    article_paragraphs = article_data[article_data['article_id'] == article_id]
-    if article_paragraphs.empty:
-        return False
-    max_para_idx = article_paragraphs['para_idx'].max()
-    return para_idx >= max_para_idx  # strictly final paragraph
-
+# ------------------------------------------------------------
+# NLP helpers / QA checks
+# ------------------------------------------------------------
 def basic_tokenize(text):
     toks = [w.lower() for w in re.findall(r'\b[\wéèêëàâîïôöùûüç-]+\b', text, flags=re.UNICODE)]
     return [t for t in toks if t not in FRENCH_STOPWORDS and t.isalpha() and len(t) > 2]
@@ -362,6 +380,17 @@ def lemmatize(text, nlp):
                 if not t.is_stop and not t.is_punct and t.is_alpha and len(t.text) > 2]
     except Exception:
         return basic_tokenize(text)
+
+def check_word_count(transition_text, limit=5):
+    words = re.findall(r'\b\w+\b', transition_text, flags=re.UNICODE)
+    return len(words) <= limit, len(words)
+
+def check_final_position(article_data, article_id, para_idx):
+    article_paragraphs = article_data[article_data['article_id'] == article_id]
+    if article_paragraphs.empty:
+        return False
+    max_para_idx = article_paragraphs['para_idx'].max()
+    return para_idx >= max_para_idx  # strictly final paragraph
 
 def check_repetition(article_data, article_id, transition_text, nlp):
     article_transitions = article_data[article_data['article_id'] == article_id]['transition_text'].tolist()
@@ -403,7 +432,7 @@ def analyze_transitions(df, nlp, sentence_model, similarity_threshold, limit_wor
 
         progress = (idx + 1) / len(df)
         progress_bar.progress(progress)
-        status_text.text(f"Processing transition {idx + 1} of {len(df)}: {transition_text[:50]}…")
+        status_text.text(f"Processing transition {idx + 1} of {len(df)}: {transition_text[:60]}…")
 
         wc_ok, actual_wc = check_word_count(transition_text, limit_words)
         pos_ok = check_final_position(df, article_id, para_idx)
@@ -451,65 +480,34 @@ def analyze_transitions(df, nlp, sentence_model, similarity_threshold, limit_wor
     status_text.empty()
     return pd.DataFrame(results)
 
-def create_article_summary(results_df, article_id):
-    article_data = results_df[results_df['article_id'] == article_id]
-    if article_data.empty:
-        return None
-    article_title = article_data['article_title'].iloc[0]
-    total_transitions = len(article_data)
-    pass_count = (article_data['pass_fail'] == 'Pass').sum()
-    compliance_rate = (pass_count / total_transitions) * 100 if total_transitions > 0 else 0
-    avg_sim_next = article_data['similarity_next'].mean()
-    avg_sim_prev = article_data['similarity_prev'].mean()
-    rule_violations = {
-        'Word Count': (~article_data['word_count_ok']).sum(),
-        'Position': (~article_data['final_position_ok']).sum(),
-        'Repetition': (~article_data['repetition_ok']).sum(),
-        'Cohesion': (~article_data['cohesion_ok']).sum()
-    }
-    return {
-        'article_id': article_id,
-        'article_title': article_title,
-        'total_transitions': total_transitions,
-        'pass_count': pass_count,
-        'compliance_rate': compliance_rate,
-        'avg_sim_next': avg_sim_next,
-        'avg_sim_prev': avg_sim_prev,
-        'rule_violations': rule_violations
-    }
-
-# ---------------- Suggestions / Corrections ----------------
+# ------------------------------------------------------------
+# Suggestions / Corrections
+# ------------------------------------------------------------
 def trim_to_limit(transition_text, limit=5):
     tokens = re.findall(r'\b\w+\b', transition_text, flags=re.UNICODE)
     trimmed = " ".join(tokens[:limit])
-    # Preserve original punctuation if short
     if transition_text.strip().endswith(('.', '…', '!', '?')):
         return trimmed + transition_text.strip()[-1]
     return trimmed
 
 def suggest_synonym(transition_text, avoid_lemmas):
-    key = transition_text.strip().lower()
-    # Normalize accents/hyphens lightly (simple approach)
-    key = key.replace("’", "'")
+    key = transition_text.strip().lower().replace("’", "'")
     candidates = TRANSITION_SYNONYMS.get(key, [])
-    # Remove any candidate that shares forbidden lemmas
     keep = []
     for c in candidates:
         c_lemmas = set(basic_tokenize(c))
         if not c_lemmas.intersection(avoid_lemmas):
             keep.append(c)
-    # Fallback: offer role-based connectors that don't conflict
     if not keep:
         for group in CONNECTOR_BANK.values():
             for c in group:
                 if not set(basic_tokenize(c)).intersection(avoid_lemmas):
                     keep.append(c)
-    # Deduplicate while preserving order
     seen = set(); dedup = []
     for c in keep:
         if c not in seen:
             dedup.append(c); seen.add(c)
-    return dedup[:4]  # cap list
+    return dedup[:4]
 
 def build_corrections(results_df, nlp, limit_words, sim_threshold):
     corrections = []
@@ -532,12 +530,10 @@ def build_corrections(results_df, nlp, limit_words, sim_threshold):
 
         if not r['cohesion_ok']:
             reasons.append(f"Increase thematic cohesion (Δ < {sim_threshold})")
-            # offer role-based neutral choices to improve linkage
             alts = CONNECTOR_BANK["cause_effect"] + CONNECTOR_BANK["contrast"] + CONNECTOR_BANK["summary"]
-            # filter by repetition avoid-list
             alts = [a for a in alts if not set(basic_tokenize(a)).intersection(avoid)]
-            if alts:
-                suggestion = suggestion if suggestion != r['transition_text'] else alts[0]
+            if alts and suggestion == r['transition_text']:
+                suggestion = alts[0]
 
         if not r['final_position_ok']:
             reasons.append("Ensure transition is placed in the final paragraph")
@@ -552,18 +548,59 @@ def build_corrections(results_df, nlp, limit_words, sim_threshold):
         })
     return pd.DataFrame(corrections)
 
-# ---------------- Top lemmas (global) ----------------
+# ------------------------------------------------------------
+# Lemma analytics
+# ------------------------------------------------------------
 def top_repeated_lemmas(results_df, nlp, topn=15):
-    # Aggregate lemmas from ALL transitions, then mark those that are repeated across an article
     lemma_counter = Counter()
     for _, r in results_df.iterrows():
         lemmas = lemmatize(r['transition_text'], nlp)
         lemma_counter.update(lemmas)
-    # Return top lemmas overall
     top = lemma_counter.most_common(topn)
     return pd.DataFrame(top, columns=["lemma", "count"])
 
-# ---------------- Main App ----------------
+# ------------------------------------------------------------
+# Visualization helpers
+# ------------------------------------------------------------
+def style_pass_fail(val):
+    color = '#27ae60' if val == 'Pass' else '#e74c3c'
+    return f'color: {color}; font-weight: bold'
+
+def plot_rule_breakdown(results_df):
+    rule_violations = {
+        'Word Count': (~results_df['word_count_ok']).sum(),
+        'Position': (~results_df['final_position_ok']).sum(),
+        'Repetition': (~results_df['repetition_ok']).sum(),
+        'Cohesion': (~results_df['cohesion_ok']).sum()
+    }
+    fig, ax = plt.subplots(figsize=(5.5, 3.6))
+    ax.bar(list(rule_violations.keys()), list(rule_violations.values()))
+    ax.set_title('Rule Violations Distribution')
+    ax.set_ylabel('Count'); ax.set_xlabel('Rule')
+    plt.xticks(rotation=15, ha='right')
+    st.pyplot(fig); plt.close()
+
+def plot_pass_fail(results_df):
+    figpf, axpf = plt.subplots(figsize=(5.0, 3.6))
+    pass_count = (results_df['pass_fail'] == 'Pass').sum()
+    fail_count = (results_df['pass_fail'] == 'Fail').sum()
+    if pass_count + fail_count == 0:
+        pass
+    axpf.pie([pass_count, fail_count], labels=['Pass','Fail'], autopct='%1.0f%%', startangle=90)
+    axpf.set_title('Overall Compliance')
+    st.pyplot(figpf); plt.close()
+
+def plot_cohesion_hist(results_df, threshold):
+    fig2, ax2 = plt.subplots(figsize=(5.5, 3.6))
+    ax2.hist(results_df['cohesion_diff'], bins=15)
+    ax2.axvline(x=threshold, linestyle='--')
+    ax2.set_title('Cohesion Δ Histogram (next - prev)')
+    ax2.set_xlabel('Δ'); ax2.set_ylabel('Frequency')
+    st.pyplot(fig2); plt.close()
+
+# ------------------------------------------------------------
+# Main App
+# ------------------------------------------------------------
 def main():
     # Load models
     with st.spinner("🚀 Loading NLP models…"):
@@ -573,7 +610,7 @@ def main():
     st.markdown("""
     <div style="background:linear-gradient(135deg,#e8f4f8 0%,#d1e7f5 100%);padding:1rem;border-radius:12px;border-left:6px solid #3498db;margin-top:-.3rem">
       <h4 style="margin:0 0 .4rem 0">Welcome to the French Transition QA Tool</h4>
-      <p style="margin:0">Upload PDF, TXT, or DOCX files that contain <em>Titre:</em>, content, and <em>Transitions générées:</em>. 
+      <p style="margin:0">Upload ZIP/TXT/PDF/DOCX that contain <em>Titre:</em>, article content, and <em>Transitions générées:</em>.<br>
       The app enforces: ≤ word limit, final-position only, lemma repetition ban, and thematic cohesion (next &gt; prev).</p>
     </div>
     """, unsafe_allow_html=True)
@@ -581,19 +618,17 @@ def main():
     # Upload
     st.markdown('<div class="sub-header">📤 Upload Files</div>', unsafe_allow_html=True)
     uploaded_files = st.file_uploader(
-        "Drag and drop your files here",
-        type=["pdf", "txt", "docx"],
-        help="Files should contain articles with transition phrases",
+        "Drag and drop your files here", type=["zip", "pdf", "txt", "docx"],
+        help="Multiple files allowed. ZIP will load all contained .txt files.",
         accept_multiple_files=True
     )
-
     if not uploaded_files:
         st.info("👆 Please upload one or more files to begin analysis.")
         with st.expander("📋 Expected File Structure Example"):
             st.markdown("""
-            <strong>Titre:</strong> Votre titre d'article ici  
-            Contenu de l'article…  
-            <strong>Transitions générées:</strong>  
+            **Titre:** Votre titre d'article ici  
+            (Contenu de l'article…)  
+            **Transitions générées:**  
             1. En conclusion  
             2. Pour résumer  
             3. Finalement
@@ -611,7 +646,7 @@ def main():
                 continue
             articles = parse_articles_from_text(text)
             if articles:
-                st.success(f"Found {len(articles)} articles with {sum(len(a['transitions']) for a in articles)} transitions")
+                st.success(f"Found {len(articles)} article(s) with {sum(len(a['transitions']) for a in articles)} transitions")
                 all_articles.extend(articles)
             else:
                 st.warning(f"No articles found in {uploaded_file.name}")
@@ -625,151 +660,213 @@ def main():
             st.error("No transitions could be processed from the articles.")
             return
 
-        st.success(f"✅ Extracted {len(df)} transitions from {len(uploaded_files)} file(s)")
+        st.success(f"✅ Extracted {len(df)} transitions across {len({a['title'] for a in all_articles})} article(s)")
 
         with st.spinner("🔍 Running QA checks…"):
-            results_df = analyze_transitions(df, nlp, sentence_model, similarity_threshold, word_limit)
+            results_all = analyze_transitions(df, nlp, sentence_model, similarity_threshold, word_limit)
 
-        # Filters
-        st.markdown('<div class="sub-header">📊 QA Results</div>', unsafe_allow_html=True)
-        colf1, colf2, colf3 = st.columns([1,1,2])
-        show_only_fails = colf1.checkbox("Show only fails", value=False)
-        rule_filter = colf2.multiselect(
-            "Filter by failed rule",
-            options=["Word Count", "Position", "Repetition", "Cohesion"],
-            default=[]
-        )
-        sort_by_delta = colf3.checkbox("Sort by weakest cohesion (Δ asc)", value=True)
+        # ------------ Tabs: Global vs Per-Article ------------
+        tab_global, tab_article = st.tabs(["🌐 Global View", "📄 Per-Article View"])
 
-        filtered = results_df.copy()
-        if show_only_fails:
-            filtered = filtered[filtered['pass_fail'] == 'Fail']
-        if rule_filter:
-            mask = filtered['triggered_rule'].apply(lambda s: any(r in s for r in rule_filter))
-            filtered = filtered[mask]
-        if sort_by_delta:
-            filtered = filtered.sort_values(by="cohesion_diff", ascending=True)
+        # ----------------- Global View -----------------
+        with tab_global:
+            st.markdown('<div class="sub-header">📊 QA Results (All Articles)</div>', unsafe_allow_html=True)
+            colf1, colf2, colf3 = st.columns([1,1,2])
+            show_only_fails = colf1.checkbox("Show only fails (global)", value=False, key="global_fails")
+            rule_filter = colf2.multiselect(
+                "Filter by failed rule",
+                options=["Word Count", "Position", "Repetition", "Cohesion"],
+                default=[], key="global_rules"
+            )
+            sort_by_delta = colf3.checkbox("Sort by weakest cohesion Δ (asc)", value=True, key="global_sort")
 
-        # Display table
-        def color_pass_fail(val):
-            color = '#27ae60' if val == 'Pass' else '#e74c3c'
-            return f'color: {color}; font-weight: bold'
-        display_df = filtered.drop(columns=['repeated_lemmas'], errors='ignore')
-        st.dataframe(display_df.style.applymap(color_pass_fail, subset=['pass_fail']),
-                     height=420, use_container_width=True)
+            filtered_global = results_all.copy()
+            if show_only_fails:
+                filtered_global = filtered_global[filtered_global['pass_fail'] == 'Fail']
+            if rule_filter:
+                mask = filtered_global['triggered_rule'].apply(lambda s: any(r in s for r in rule_filter))
+                filtered_global = filtered_global[mask]
+            if sort_by_delta:
+                filtered_global = filtered_global.sort_values(by="cohesion_diff", ascending=True)
 
-        # Article summaries
-        st.markdown('<div class="sub-header">📈 Article Summary Statistics</div>', unsafe_allow_html=True)
-        for article_id in results_df['article_id'].unique():
-            summary = create_article_summary(results_df, article_id)
-            if not summary:
-                continue
-            st.markdown(f'<div class="sub-header" style="border:none;margin-top:.2rem">📄 Article {summary["article_id"]}: {summary["article_title"]}</div>', unsafe_allow_html=True)
+            display_df_global = filtered_global.drop(columns=['repeated_lemmas'], errors='ignore')
+            st.dataframe(display_df_global.style.applymap(style_pass_fail, subset=['pass_fail']),
+                         height=420, use_container_width=True)
+
+            # Global stats + visuals
+            st.markdown('<div class="sub-header">🌐 Global Analytics</div>', unsafe_allow_html=True)
+            g1, g2 = st.columns(2)
+            with g1:
+                plot_rule_breakdown(results_all)
+                plot_pass_fail(results_all)
+            with g2:
+                plot_cohesion_hist(results_all, similarity_threshold)
+                worst = results_all.nsmallest(10, 'cohesion_diff')[['article_id','article_title','para_idx','transition_text','cohesion_diff','pass_fail']]
+                st.caption("Weakest cohesion examples (lowest Δ)")
+                st.dataframe(worst, use_container_width=True, height=240)
+
+            # Top repeated lemmas (global)
+            st.markdown('<div class="sub-header">🔁 Top Repeated Lemmas (Global)</div>', unsafe_allow_html=True)
+            top_lemmas_df_global = top_repeated_lemmas(results_all, nlp, topn=15)
+            coltl1, coltl2 = st.columns([1,1])
+            with coltl1:
+                st.dataframe(top_lemmas_df_global, use_container_width=True, height=360)
+            with coltl2:
+                fig3, ax3 = plt.subplots(figsize=(5.5, 4.2))
+                ax3.barh(top_lemmas_df_global['lemma'][::-1], top_lemmas_df_global['count'][::-1])
+                ax3.set_title('Most Frequent Lemmas in Transitions (Global)')
+                ax3.set_xlabel('Count'); ax3.set_ylabel('Lemma')
+                st.pyplot(fig3); plt.close()
+
+            # Corrections (global)
+            st.markdown('<div class="sub-header">🛠️ Correction Suggestions (Global)</div>', unsafe_allow_html=True)
+            corr_df_global = build_corrections(results_all, nlp, word_limit, similarity_threshold)
+            if corr_df_global.empty:
+                st.markdown("""
+                <div class="success-box"><strong>🎉 All good!</strong> No corrections needed — all transitions passed.</div>
+                """, unsafe_allow_html=True)
+            else:
+                st.dataframe(corr_df_global, use_container_width=True, height=360)
+                csv_corr = corr_df_global.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Correction Summary (CSV, Global)",
+                    data=csv_corr,
+                    file_name="transition_corrections_global.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
+            # Export raw results
+            st.markdown('<div class="sub-header">💾 Export Results (Global)</div>', unsafe_allow_html=True)
+            colx1, colx2 = st.columns(2)
+            with colx1:
+                csv = results_all.drop('repeated_lemmas', axis=1).to_csv(index=False)
+                st.download_button("📥 Download CSV Results (Global)", csv, "transition_qa_results_global.csv", "text/csv", use_container_width=True)
+            with colx2:
+                html = results_all.drop('repeated_lemmas', axis=1).to_html(index=False, escape=False)
+                st.download_button("📥 Download HTML Report (Global)", html, "transition_qa_report_global.html", "text/html", use_container_width=True)
+
+        # ----------------- Per-Article View -----------------
+        with tab_article:
+            st.markdown('<div class="sub-header">📄 Select Article</div>', unsafe_allow_html=True)
+            # Build list of articles
+            article_options = results_all[['article_id','article_title']].drop_duplicates().sort_values('article_id')
+            article_label_map = {row.article_id: f"{row.article_id} — {row.article_title}" for _, row in article_options.iterrows()}
+
+            selected_article_id = st.selectbox(
+                "Choose an article",
+                options=list(article_label_map.keys()),
+                format_func=lambda k: article_label_map[k]
+            )
+            article_df = results_all[results_all['article_id'] == selected_article_id].copy()
+
+            # ===== QA Results (per-article) =====
+            st.markdown('<div class="sub-header">📊 QA Results (This Article)</div>', unsafe_allow_html=True)
+            colA1, colA2, colA3 = st.columns([1,1,2])
+            show_only_fails_a = colA1.checkbox("Show only fails (article)", value=False, key="article_fails")
+            rule_filter_a = colA2.multiselect(
+                "Filter by failed rule",
+                options=["Word Count", "Position", "Repetition", "Cohesion"],
+                default=[], key="article_rules"
+            )
+            sort_by_delta_a = colA3.checkbox("Sort by weakest cohesion Δ (asc)", value=True, key="article_sort")
+
+            filtered_a = article_df.copy()
+            if show_only_fails_a:
+                filtered_a = filtered_a[filtered_a['pass_fail'] == 'Fail']
+            if rule_filter_a:
+                mask = filtered_a['triggered_rule'].apply(lambda s: any(r in s for r in rule_filter_a))
+                filtered_a = filtered_a[mask]
+            if sort_by_delta_a:
+                filtered_a = filtered_a.sort_values(by="cohesion_diff", ascending=True)
+
+            display_df_a = filtered_a.drop(columns=['repeated_lemmas'], errors='ignore')
+            st.dataframe(display_df_a.style.applymap(style_pass_fail, subset=['pass_fail']),
+                         height=420, use_container_width=True)
+
+            # ===== Article metrics =====
+            st.markdown('<div class="sub-header">📈 Analytics (This Article)</div>', unsafe_allow_html=True)
+            # Summary cards
+            pass_count = (article_df['pass_fail'] == 'Pass').sum()
+            total_transitions = len(article_df)
+            compliance_rate = (pass_count / total_transitions) * 100 if total_transitions else 0.0
+            avg_sim_next = article_df['similarity_next'].mean()
+            avg_sim_prev = article_df['similarity_prev'].mean()
+
             c1, c2, c3, c4 = st.columns(4)
             with c1:
                 st.markdown(f"""
-                <div class="metric-card"><div class="metric-value">{summary['compliance_rate']:.1f}%</div>
+                <div class="metric-card"><div class="metric-value">{compliance_rate:.1f}%</div>
                 <div class="metric-label">Compliance</div></div>""", unsafe_allow_html=True)
             with c2:
                 st.markdown(f"""
-                <div class="metric-card"><div class="metric-value">{summary['pass_count']}/{summary['total_transitions']}</div>
+                <div class="metric-card"><div class="metric-value">{pass_count}/{total_transitions}</div>
                 <div class="metric-label">Passed</div></div>""", unsafe_allow_html=True)
             with c3:
                 st.markdown(f"""
-                <div class="metric-card"><div class="metric-value">{summary['avg_sim_next']:.3f}</div>
+                <div class="metric-card"><div class="metric-value">{avg_sim_next:.3f}</div>
                 <div class="metric-label">Avg sim (next)</div></div>""", unsafe_allow_html=True)
             with c4:
                 st.markdown(f"""
-                <div class="metric-card"><div class="metric-value">{summary['avg_sim_prev']:.3f}</div>
+                <div class="metric-card"><div class="metric-value">{avg_sim_prev:.3f}</div>
                 <div class="metric-label">Avg sim (prev)</div></div>""", unsafe_allow_html=True)
 
-            # Rule violations list
-            for rule, count in summary['rule_violations'].items():
-                if count > 0:
-                    st.markdown(f"- **{rule}**: {count} violation(s)")
+            # Charts (per-article)
+            ga1, ga2 = st.columns(2)
+            with ga1:
+                plot_rule_breakdown(article_df)
+                plot_pass_fail(article_df)
+            with ga2:
+                plot_cohesion_hist(article_df, similarity_threshold)
+                worst_a = article_df.nsmallest(10, 'cohesion_diff')[['para_idx','transition_text','cohesion_diff','pass_fail']]
+                st.caption("Weakest cohesion examples (lowest Δ) — this article")
+                st.dataframe(worst_a, use_container_width=True, height=240)
 
-        # Global stats + visuals
-        st.markdown('<div class="sub-header">🌐 Global Analytics</div>', unsafe_allow_html=True)
-        g1, g2 = st.columns(2)
+            # ===== Top repeated lemmas (per-article) =====
+            st.markdown('<div class="sub-header">🔁 Top Repeated Lemmas (This Article)</div>', unsafe_allow_html=True)
+            top_lemmas_df_a = top_repeated_lemmas(article_df, nlp, topn=15)
+            la1, la2 = st.columns([1,1])
+            with la1:
+                st.dataframe(top_lemmas_df_a, use_container_width=True, height=340)
+            with la2:
+                fig_la, ax_la = plt.subplots(figsize=(5.5, 4.0))
+                if not top_lemmas_df_a.empty:
+                    ax_la.barh(top_lemmas_df_a['lemma'][::-1], top_lemmas_df_a['count'][::-1])
+                ax_la.set_title('Most Frequent Lemmas in Transitions (Article)')
+                ax_la.set_xlabel('Count'); ax_la.set_ylabel('Lemma')
+                st.pyplot(fig_la); plt.close()
 
-        with g1:
-            # Failure breakdown (improved)
-            failure_df = results_df[results_df['pass_fail'] == 'Fail']
-            rule_violations = {
-                'Word Count': (~results_df['word_count_ok']).sum(),
-                'Position': (~results_df['final_position_ok']).sum(),
-                'Repetition': (~results_df['repetition_ok']).sum(),
-                'Cohesion': (~results_df['cohesion_ok']).sum()
-            }
-            fig1, ax1 = plt.subplots(figsize=(5.5, 3.6))
-            ax1.bar(list(rule_violations.keys()), list(rule_violations.values()))
-            ax1.set_title('Rule Violations Distribution')
-            ax1.set_ylabel('Count'); ax1.set_xlabel('Rule')
-            plt.xticks(rotation=15, ha='right')
-            st.pyplot(fig1); plt.close()
+            # ===== Correction suggestions (per-article) =====
+            st.markdown('<div class="sub-header">🛠️ Correction Suggestions (This Article)</div>', unsafe_allow_html=True)
+            corr_df_a = build_corrections(article_df, nlp, word_limit, similarity_threshold)
+            if corr_df_a.empty:
+                st.markdown("""
+                <div class="success-box"><strong>🎉 All good!</strong> No corrections needed in this article.</div>
+                """, unsafe_allow_html=True)
+            else:
+                st.dataframe(corr_df_a, use_container_width=True, height=320)
+                csv_corr_a = corr_df_a.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Correction Summary (CSV, This Article)",
+                    data=csv_corr_a,
+                    file_name=f"transition_corrections_article_{selected_article_id}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
 
-            # Pass/Fail pie
-            figpf, axpf = plt.subplots(figsize=(5.0, 3.6))
-            pass_count = (results_df['pass_fail'] == 'Pass').sum()
-            fail_count = (results_df['pass_fail'] == 'Fail').sum()
-            axpf.pie([pass_count, fail_count], labels=['Pass','Fail'], autopct='%1.0f%%', startangle=90)
-            axpf.set_title('Overall Compliance')
-            st.pyplot(figpf); plt.close()
-
-        with g2:
-            # Cohesion histogram & weak spots
-            fig2, ax2 = plt.subplots(figsize=(5.5, 3.6))
-            ax2.hist(results_df['cohesion_diff'], bins=15)
-            ax2.axvline(x=similarity_threshold, linestyle='--')
-            ax2.set_title('Cohesion Δ Histogram (next - prev)')
-            ax2.set_xlabel('Δ'); ax2.set_ylabel('Frequency')
-            st.pyplot(fig2); plt.close()
-
-            worst = results_df.nsmallest(10, 'cohesion_diff')[['article_id','para_idx','transition_text','cohesion_diff','pass_fail']]
-            st.caption("Weakest cohesion examples (lowest Δ)")
-            st.dataframe(worst, use_container_width=True)
-
-        # Top repeated lemmas (global)
-        st.markdown('<div class="sub-header">🔁 Top Repeated Lemmas (Global)</div>', unsafe_allow_html=True)
-        top_lemmas_df = top_repeated_lemmas(results_df, nlp, topn=15)
-        coltl1, coltl2 = st.columns([1,1])
-        with coltl1:
-            st.dataframe(top_lemmas_df, use_container_width=True, height=360)
-        with coltl2:
-            fig3, ax3 = plt.subplots(figsize=(5.5, 4.2))
-            ax3.barh(top_lemmas_df['lemma'][::-1], top_lemmas_df['count'][::-1])
-            ax3.set_title('Most Frequent Lemmas in Transitions')
-            ax3.set_xlabel('Count'); ax3.set_ylabel('Lemma')
-            st.pyplot(fig3); plt.close()
-
-        # Build correction suggestions
-        st.markdown('<div class="sub-header">🛠️ Correction Suggestions</div>', unsafe_allow_html=True)
-        corr_df = build_corrections(results_df, nlp, word_limit, similarity_threshold)
-        if corr_df.empty:
-            st.markdown("""
-            <div class="success-box"><strong>🎉 All good!</strong> No corrections needed — all transitions passed.</div>
-            """, unsafe_allow_html=True)
-        else:
-            st.dataframe(corr_df, use_container_width=True, height=360)
-            # Export correction summary
-            csv_corr = corr_df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Download Correction Summary (CSV)",
-                data=csv_corr,
-                file_name="transition_corrections.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-
-        # Export raw results
-        st.markdown('<div class="sub-header">💾 Export Results</div>', unsafe_allow_html=True)
-        colx1, colx2 = st.columns(2)
-        with colx1:
-            csv = results_df.drop('repeated_lemmas', axis=1).to_csv(index=False)
-            st.download_button("📥 Download CSV Results", csv, "transition_qa_results.csv", "text/csv", use_container_width=True)
-        with colx2:
-            html = results_df.drop('repeated_lemmas', axis=1).to_html(index=False, escape=False)
-            st.download_button("📥 Download HTML Report", html, "transition_qa_report.html", "text/html", use_container_width=True)
+            # ===== Per-article export =====
+            st.markdown('<div class="sub-header">💾 Export Results (This Article)</div>', unsafe_allow_html=True)
+            colpx1, colpx2 = st.columns(2)
+            with colpx1:
+                csv_a = article_df.drop('repeated_lemmas', axis=1).to_csv(index=False)
+                st.download_button(f"📥 Download CSV Results (Article {selected_article_id})",
+                                   csv_a, f"transition_qa_results_article_{selected_article_id}.csv",
+                                   "text/csv", use_container_width=True)
+            with colpx2:
+                html_a = article_df.drop('repeated_lemmas', axis=1).to_html(index=False, escape=False)
+                st.download_button(f"📥 Download HTML Report (Article {selected_article_id})",
+                                   html_a, f"transition_qa_report_article_{selected_article_id}.html",
+                                   "text/html", use_container_width=True)
 
         # Footer
         st.markdown("---")
