@@ -1,20 +1,5 @@
 import streamlit as st
 import pandas as pd
-import spacy
-from spacy.cli import download
-
-# Ensure SpaCy models are available
-try:
-    spacy.load("fr_core_news_sm")
-except OSError:
-    download("fr_core_news_sm")
-
-try:
-    spacy.load("en_core_web_sm")
-except OSError:
-    download("en_core_web_sm")
-
-from sentence_transformers import SentenceTransformer, util
 import re
 import io
 import PyPDF2
@@ -24,6 +9,66 @@ import seaborn as sns
 from collections import Counter
 import warnings
 warnings.filterwarnings('ignore')
+
+# Load models with comprehensive error handling
+@st.cache_resource
+def load_spacy_model():
+    """Load French spaCy model with fallback options"""
+    try:
+        import spacy
+        # Try to load the model
+        try:
+            nlp = spacy.load("fr_core_news_sm")
+            return nlp
+        except OSError:
+            # If model not found, try to download it
+            st.warning("⚠️ French spaCy model not found. Attempting to download...")
+            try:
+                spacy.cli.download("fr_core_news_sm")
+                nlp = spacy.load("fr_core_news_sm")
+                st.success("✅ Successfully downloaded and loaded French spaCy model")
+                return nlp
+            except Exception as download_error:
+                st.error(f"❌ Could not download spaCy model: {download_error}")
+                # Return a minimal NLP processor
+                st.warning("⚠️ Using basic text processing instead of spaCy")
+                return None
+    except ImportError as e:
+        st.error(f"❌ spaCy import failed: {e}")
+        return None
+
+@st.cache_resource
+def load_sentence_model():
+    """Load sentence transformer model with error handling"""
+    try:
+        from sentence_transformers import SentenceTransformer
+        model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+        st.success("✅ Successfully loaded sentence transformer model")
+        return model
+    except Exception as e:
+        st.error(f"❌ Error loading sentence transformer: {e}")
+        # Try a smaller model as fallback
+        try:
+            from sentence_transformers import SentenceTransformer
+            model = SentenceTransformer('distiluse-base-multilingual-cased')
+            st.warning("⚠️ Using fallback sentence transformer model")
+            return model
+        except Exception as fallback_error:
+            st.error(f"❌ Fallback model also failed: {fallback_error}")
+            return None
+
+# Initialize models
+@st.cache_resource
+def initialize_models():
+    """Initialize all required models with graceful degradation"""
+    nlp = load_spacy_model()
+    sentence_model = load_sentence_model()
+    
+    if sentence_model is None:
+        st.error("❌ Cannot proceed without sentence transformer model")
+        st.stop()
+    
+    return nlp, sentence_model
 
 # ---------------- Streamlit Page Configuration ----------------
 st.set_page_config(
@@ -241,7 +286,7 @@ with st.sidebar:
     st.markdown("---")
     
     st.markdown("### ⚙️ Model Info")
-    st.write("**spaCy**: fr_core_news_md (French language model)")
+    st.write("**spaCy**: fr_core_news_sm (French language model)")
     st.write("**Sentence Transformer**: paraphrase-multilingual-MiniLM-L12-v2")
     
     # Configurable thresholds
@@ -279,41 +324,39 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("Built For French Transition Contest Submission")
 
-# ---------------- Load Models ----------------
-@st.cache_resource
-def load_spacy_model():
-    try:
-        return spacy.load("fr_core_news_md")
-    except OSError:
-        st.error("French spaCy model not found. Run: python -m spacy download fr_core_news_md")
-        st.stop()
-
-@st.cache_resource
-def load_sentence_model():
-    return SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
-
-with st.spinner("Loading NLP models..."):
-    nlp = load_spacy_model()
-    sentence_model = load_sentence_model()
-
-# ---------------- File Parsing ----------------
+# ---------------- File Parsing Functions ----------------
 def extract_text_from_pdf(pdf_file):
+    """Extract text from PDF file"""
     text = ""
-    reader = PyPDF2.PdfReader(pdf_file)
-    for page in reader.pages:
-        page_text = page.extract_text()
-        if page_text:
-            text += page_text + "\n"
+    try:
+        reader = PyPDF2.PdfReader(pdf_file)
+        for page in reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
+    except Exception as e:
+        st.error(f"Error reading PDF: {e}")
     return text
 
 def extract_text_from_txt(txt_file):
-    return txt_file.getvalue().decode('utf-8')
+    """Extract text from TXT file"""
+    try:
+        return txt_file.getvalue().decode('utf-8')
+    except Exception as e:
+        st.error(f"Error reading TXT: {e}")
+        return ""
 
 def extract_text_from_docx(docx_file):
-    doc = Document(io.BytesIO(docx_file.read()))
-    return "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+    """Extract text from DOCX file"""
+    try:
+        doc = Document(io.BytesIO(docx_file.read()))
+        return "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+    except Exception as e:
+        st.error(f"Error reading DOCX: {e}")
+        return ""
 
 def extract_text(uploaded_file):
+    """Extract text based on file extension"""
     ext = uploaded_file.name.split('.')[-1].lower()
     if ext == 'pdf':
         return extract_text_from_pdf(uploaded_file)
@@ -325,7 +368,7 @@ def extract_text(uploaded_file):
         st.error(f"Unsupported file type: {ext}. Only PDF, TXT, DOCX allowed.")
         return ""
 
-# ---------------- Transition Parsing ----------------
+# ---------------- Article Parsing Functions ----------------
 def parse_articles_from_text(text):
     """Parse articles and transitions from the extracted text"""
     articles = []
@@ -390,19 +433,14 @@ def create_dataframe_from_articles(articles):
         transitions = article["transitions"]
         
         # Split content into sentences/paragraphs more intelligently
-        # Look for transition phrases in the content to determine paragraph structure
-        paragraphs = []
-        remaining_content = content
-        
-        # For each transition, try to locate it in the content
         for trans_idx, transition in enumerate(transitions):
             # Find the transition in the content
-            transition_pos = remaining_content.find(transition)
+            transition_pos = content.find(transition)
             
             if transition_pos != -1:
                 # Extract text before and after the transition
-                before_transition = remaining_content[:transition_pos].strip()
-                after_transition = remaining_content[transition_pos + len(transition):].strip()
+                before_transition = content[:transition_pos].strip()
+                after_transition = content[transition_pos + len(transition):].strip()
                 
                 # Split before_transition into sentences
                 if before_transition:
@@ -430,13 +468,10 @@ def create_dataframe_from_articles(articles):
                     "previous_paragraph": prev_para,
                     "next_paragraph": next_para
                 })
-                
-                # Update remaining content for next iteration
-                remaining_content = after_transition
     
     return pd.DataFrame(data)
 
-# ---------------- QA Checks ----------------
+# ---------------- QA Check Functions ----------------
 def check_word_count(transition_text):
     """Check if transition has ≤ 5 words"""
     words = re.findall(r'\b\w+\b', transition_text, flags=re.UNICODE)
@@ -454,7 +489,27 @@ def check_final_position(article_data, article_id, para_idx):
 def check_repetition(article_data, article_id, transition_text, nlp):
     """Check if transition lemmas are repeated elsewhere in the article"""
     if nlp is None:
-        return True, []  # Pass if no NLP model available
+        # If no spaCy model available, do basic word-level comparison
+        try:
+            import re
+            article_transitions = article_data[article_data['article_id'] == article_id]['transition_text'].tolist()
+            other_transitions = [t for t in article_transitions if t != transition_text]
+            
+            if not other_transitions:
+                return True, []  # No other transitions to compare with
+            
+            # Basic word tokenization
+            trans_words = set(re.findall(r'\b\w+\b', transition_text.lower()))
+            repeated_words = set()
+            
+            for other_trans in other_transitions:
+                other_words = set(re.findall(r'\b\w+\b', other_trans.lower()))
+                repeated_words.update(trans_words.intersection(other_words))
+            
+            return len(repeated_words) == 0, list(repeated_words)
+        except Exception as e:
+            st.warning(f"Error in basic repetition check: {e}")
+            return True, []  # Pass if error occurs
     
     try:
         # Get all transitions from the same article
@@ -488,6 +543,7 @@ def compute_similarity(text1, text2, model):
         return 0.0
     
     try:
+        from sentence_transformers import util
         embeddings = model.encode([text1, text2], convert_to_tensor=True)
         similarity = util.pytorch_cos_sim(embeddings[0], embeddings[1])
         return float(similarity.item())
@@ -614,9 +670,13 @@ def create_article_summary(results_df, article_id):
         'rule_violations': rule_violations
     }
 
-# ---------------- Main App ----------------
+# ---------------- Main Application ----------------
 def main():
-    # Welcome section below the header image
+    # Load models
+    with st.spinner("🚀 Loading NLP models... This may take a moment."):
+        nlp, sentence_model = initialize_models()
+    
+    # Welcome section
     st.markdown("""
     <div class="info-box">
         <h4>Welcome to the French Transition QA Tool</h4>
@@ -644,6 +704,10 @@ def main():
                 
                 # Extract text from file
                 text = extract_text(uploaded_file)
+                
+                if not text:
+                    st.warning(f"No text extracted from {uploaded_file.name}")
+                    continue
                 
                 # Parse articles from text
                 articles = parse_articles_from_text(text)
@@ -815,7 +879,9 @@ def main():
                                 f'{int(height)}', ha='center', va='bottom')
                 
                 plt.xticks(rotation=45, ha='right')
+                plt.tight_layout()
                 st.pyplot(fig)
+                plt.close()
             else:
                 st.markdown("""
                 <div class="success-box">
@@ -851,7 +917,7 @@ def main():
                 )
         
         except Exception as e:
-            st.error(f"An error occurred during processing: {str(e)}")
+            st.error(f"❌ An error occurred during processing: {str(e)}")
             st.exception(e)  # This will show the full traceback for debugging
     
     else:
