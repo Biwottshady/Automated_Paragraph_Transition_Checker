@@ -4,6 +4,7 @@
 spacy==3.7.2
 https://github.com/explosion/spacy-models/releases/download/fr_core_news_sm-3.7.0/fr_core_news_sm-3.7.0-py3-none-any.whl
 sentence-transformers==2.2.2
+huggingface_hub==0.13.4
 torch==2.2.0
 torchvision==0.17.0
 torchaudio==2.2.0
